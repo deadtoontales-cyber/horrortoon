@@ -48,10 +48,10 @@ jobs:
           set -x
           # start background services
           docker exec -d kali_controller bash /start.sh
-          sleep 3
+          #sleep 1
           # start controller in detached tmux exactly like old working logic
-          docker exec -d kali_controller tmux new -d -s control_panel "bash -c 'source /app/venv/bin/activate && python3 /app/botnet_version4/run_controller.py'"
-          docker exec kali_controller tmux ls
+          #docker exec -d kali_controller tmux new -d -s control_panel "bash -c 'source /app/venv/bin/activate && python3 /app/botnet_version4/run_controller.py'"
+          #docker exec kali_controller tmux ls
 
       - name: Start detached tmate session
         run: |
